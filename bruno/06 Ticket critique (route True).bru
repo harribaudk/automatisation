@@ -1,0 +1,39 @@
+meta {
+  name: Ticket critique (route True)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/tickets
+  body: json
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}
+
+body:json {
+  {
+    "organisation_id": "{{orgId}}",
+    "cree_par": "{{userId}}",
+    "titre": "Serveur de production inaccessible",
+    "description": "Plus aucun service ne répond",
+    "priorite": "critique"
+  }
+}
+
+script:post-response {
+  bru.setEnvVar("ticketId", res.body[0].id);
+}
+
+tests {
+  test("201 statut nouveau", function () {
+    expect(res.status).to.equal(201);
+    expect(res.body[0].statut).to.equal("nouveau");
+  });
+}

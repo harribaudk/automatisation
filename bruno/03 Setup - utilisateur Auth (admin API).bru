@@ -1,0 +1,35 @@
+meta {
+  name: Setup - utilisateur Auth (admin API)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{authUrl}}/admin/users
+  body: json
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}
+
+body:json {
+  {
+    "email": "tech-{{$timestamp}}@alpha.test",
+    "email_confirm": true
+  }
+}
+
+script:post-response {
+  bru.setEnvVar("userId", res.body.id);
+}
+
+tests {
+  test("utilisateur créé", function () {
+    expect(res.status).to.be.oneOf([200, 201]);
+  });
+}

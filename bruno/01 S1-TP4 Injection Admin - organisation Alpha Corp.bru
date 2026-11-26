@@ -1,0 +1,35 @@
+meta {
+  name: S1-TP4 Injection Admin - organisation Alpha Corp
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/organisations
+  body: json
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}
+
+body:json {
+  {
+    "nom": "Alpha Corp"
+  }
+}
+
+script:post-response {
+  bru.setEnvVar("orgId", res.body[0].id);
+}
+
+tests {
+  test("201 + UUID renvoyé", function () {
+    expect(res.status).to.equal(201);
+    expect(res.body[0].id).to.match(/^[0-9a-f-]{36}$/);
+  });
+}

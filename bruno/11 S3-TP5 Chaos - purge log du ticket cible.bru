@@ -1,0 +1,18 @@
+meta {
+  name: S3-TP5 Chaos - purge log du ticket cible
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}/workflow_logs?ticket_id=eq.{{chaosTicketId}}
+  body: none
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}

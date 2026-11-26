@@ -1,0 +1,248 @@
+{
+  "id": "SubAuditNotifica",
+  "name": "[SUB] Audit & Notification",
+  "active": false,
+  "nodes": [
+    {
+      "id": "29cf09d6-91da-5595-8ed7-56b9d1176199",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "idempotency_key",
+              "type": "string"
+            },
+            {
+              "name": "workflow_name",
+              "type": "string"
+            },
+            {
+              "name": "ticket_id",
+              "type": "string"
+            },
+            {
+              "name": "statut",
+              "type": "string"
+            },
+            {
+              "name": "details",
+              "type": "object"
+            },
+            {
+              "name": "alert_message",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5178fdb6-b484-59b0-a88e-d5f722d6cd98",
+      "name": "Upsert workflow_logs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://klocxsqzinrxnvbwxozx.supabase.co/rest/v1/workflow_logs?on_conflict=idempotency_key",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  idempotency_key: $json.idempotency_key,\n  workflow_name: $json.workflow_name,\n  ticket_id: $json.ticket_id ? $json.ticket_id : null,\n  statut: $json.statut,\n  details: $json.details || {}\n}) }}"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "SupaServiceRole1",
+          "name": "Supabase service_role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "831923b3-7467-5a9e-8937-67d9f096fbd3",
+      "name": "Alerte à émettre ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "94f3142e-dbf4-5bbb-b426-e75e7ea2582d",
+              "leftValue": "={{ $('When Executed by Another Workflow').first().json.alert_message }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "965df300-770e-53d1-9f14-a5403f9223c7",
+      "name": "Discord astreinte",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -100
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "operation": "sendLegacy",
+        "content": "={{ $('When Executed by Another Workflow').first().json.alert_message }}",
+        "options": {}
+      },
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "DiscordAstreinte",
+          "name": "Discord astreinte"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "aebf8787-55ee-5714-80e6-d53b2577e921",
+      "name": "Bilan : notifié",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { audit_saved: true, notification_sent: true } }];"
+      }
+    },
+    {
+      "id": "507dd630-37a8-53b1-9cbf-208ee05c1d3e",
+      "name": "Bilan : notification KO",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { audit_saved: true, notification_sent: false,\n  notification_error: $input.first().json.error?.message ?? 'unknown' } }];"
+      }
+    },
+    {
+      "id": "a19d176b-5918-54c7-80f6-f677b740dadc",
+      "name": "Bilan : sans notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        150
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { audit_saved: true, notification_sent: false } }];"
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Upsert workflow_logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert workflow_logs": {
+      "main": [
+        [
+          {
+            "node": "Alerte à émettre ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerte à émettre ?": {
+      "main": [
+        [
+          {
+            "node": "Discord astreinte",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bilan : sans notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord astreinte": {
+      "main": [
+        [
+          {
+            "node": "Bilan : notifié",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bilan : notification KO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

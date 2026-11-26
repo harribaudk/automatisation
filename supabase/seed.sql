@@ -1,0 +1,1 @@
+-- Données de recette (exécutées par `supabase db reset` en local uniquement)

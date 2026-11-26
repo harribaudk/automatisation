@@ -1,0 +1,24 @@
+meta {
+  name: Vérif boucle retour - statut en_cours
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/tickets?id=eq.{{ticketId}}&select=id,titre,statut,priorite,organisations(nom)
+  body: none
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}
+
+tests {
+  test("ticket passé en_cours par n8n", function () {
+    expect(res.body[0].statut).to.equal("en_cours");
+  });
+}

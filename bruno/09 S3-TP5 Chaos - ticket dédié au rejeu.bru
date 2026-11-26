@@ -1,0 +1,34 @@
+meta {
+  name: S3-TP5 Chaos - ticket dédié au rejeu
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/tickets
+  body: json
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}
+
+body:json {
+  {
+    "organisation_id": "{{orgId}}",
+    "cree_par": "{{userId}}",
+    "titre": "Ticket cible du tir en rafale",
+    "description": "Lancer 10 trois fois à 2 s d'intervalle",
+    "priorite": "basse"
+  }
+}
+
+script:post-response {
+  bru.setEnvVar("chaosTicketId", res.body[0].id);
+  // Le webhook réel a déjà traité ce ticket : on supprime sa ligne de log
+  // avec la requête 11 avant le tir si l'on veut un #1 "inédit".
+}

@@ -1,0 +1,28 @@
+# Stack n8n — lancée avec Colima (runtime docker) : `colima start` puis `docker compose up -d`
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n_orchestrator
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - TZ=${GENERIC_TIMEZONE}
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS}
+      - N8N_DEFAULT_BINARY_DATA_MODE=${N8N_DEFAULT_BINARY_DATA_MODE}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      # Ingress Cloudflare Tunnel (TP2 S2)
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_PROXY_HOPS=1
+      # Sécurité n8n 2.x : pas d'accès à $env dans les nœuds => Credentials
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Montage en lecture seule des exports pour `n8n import:workflow`
+      - ./workflows:/workflows:ro
+      - ./credentials.template.json:/credentials.template.json:ro
+
+volumes:
+  n8n_data:

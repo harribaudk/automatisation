@@ -1,0 +1,147 @@
+{
+  "id": "OpsGlobalErrorHd",
+  "name": "[OPS] Global Error Handler",
+  "active": false,
+  "nodes": [
+    {
+      "id": "dfb4571f-04ad-5c83-a88c-f13c34d6b07a",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "81466a7f-881b-5876-bd58-e2d31d22dda5",
+      "name": "Diagnostic JS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// TP4 S3 — Extraction défensive : ce nœud ne doit JAMAIS planter\nconst e = $input.first().json ?? {};\nconst ex = e.execution ?? {};\n\nreturn [{\n  json: {\n    execution_id: String(ex.id ?? 'unknown'),\n    execution_url: ex.url ?? null,\n    workflow_name: e.workflow?.name ?? 'unknown',\n    failed_node: ex.lastNodeExecuted ?? ex.error?.node?.name ?? 'unknown',\n    error_message: ex.error?.message ?? e.trigger?.error?.message ?? 'unknown',\n    payload_snapshot: e, // objet natif, pas de JSON.stringify (pas de double sérialisation)\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "702bb3f3-a99f-5a9d-a692-8099639aeb24",
+      "name": "POST error_logs (DLQ)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://klocxsqzinrxnvbwxozx.supabase.co/rest/v1/error_logs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  execution_id: $json.execution_id,\n  workflow_name: $json.workflow_name,\n  failed_node: $json.failed_node,\n  error_message: $json.error_message,\n  payload_snapshot: $json.payload_snapshot\n}) }}"
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "SupaServiceRole1",
+          "name": "Supabase service_role"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c7af4d77-786a-5d1d-8585-0f83a736f46e",
+      "name": "DLQ indisponible",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        700,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "b22c0d3e-21b5-5fa3-8fc4-ba38904b2973",
+      "name": "Alerte astreinte Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        460,
+        120
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "operation": "sendLegacy",
+        "content": "={{ `🔥 **Crash workflow**\\n• Workflow : ${$('Diagnostic JS').first().json.workflow_name}\\n• Exécution : ${$('Diagnostic JS').first().json.execution_id} ${$('Diagnostic JS').first().json.execution_url ?? ''}\\n• Nœud fautif : ${$('Diagnostic JS').first().json.failed_node}\\n• Erreur : ${$('Diagnostic JS').first().json.error_message}` }}",
+        "options": {}
+      },
+      "credentials": {
+        "discordWebhookApi": {
+          "id": "DiscordAstreinte",
+          "name": "Discord astreinte"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Diagnostic JS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Diagnostic JS": {
+      "main": [
+        [
+          {
+            "node": "POST error_logs (DLQ)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Alerte astreinte Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST error_logs (DLQ)": {
+      "main": [
+        [],
+        [
+          {
+            "node": "DLQ indisponible",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
