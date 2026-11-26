@@ -121,3 +121,17 @@ docker exec n8n_orchestrator n8n import:credentials --input=/credentials.templat
 
 Bruno : ouvrir le dossier `bruno/`, environnement `supabase`, renseigner la variable
 secrète `secretKey`, puis exécuter dans l'ordre (01 ➜ 14).
+
+---
+
+## Recette exécutée le 26/11/2026 (projet `klocxsqzinrxnvbwxozx`, n8n 2.49.7 sur Colima)
+
+| Test | Résultat |
+|------|----------|
+| GET anon sur `tickets`, `workflow_logs`, `error_logs` | `200 []` (RLS) ; `private.app_config` non exposée (404) |
+| Ticket nominal (`normale`) | ➜ `en_cours`, log `success`, `alerte_immediate=false`, aucun message Discord |
+| Ticket critique | ➜ `en_cours`, log `success`, alerte Discord reçue (`notification_sent: true`) |
+| UPDATE manuel d'un ticket | aucun webhook émis (trigger INSERT seul, anti-boucle) |
+| Rafale ×3 à 2 s (même payload) | #1 traité + 1 alerte ; #2 et #3 ➜ « Doublon ignoré », 1 seule ligne `workflow_logs` |
+| Poison pill `ticket-invalide-123` | PATCH 400 ×3 retries (≈ 5 s) ➜ [OPS] ➜ ligne `error_logs` (`failed_node = PATCH statut en_cours`) + alerte |
+| Payload sans `record` | exception JS dans `Normalisation JS` ➜ [OPS] |
