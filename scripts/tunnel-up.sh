@@ -12,7 +12,7 @@ pkill -f "cloudflared tunnel --url http://localhost:5678" 2>/dev/null || true
 nohup cloudflared tunnel --url http://localhost:5678 >"$LOG" 2>&1 &
 echo "cloudflared lancé (PID $!), logs : $LOG"
 for _ in $(seq 1 30); do
-  URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" | head -1 || true)
+  URL=$(grep -aoE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" | head -1 || true)
   [[ -n "$URL" ]] && break; sleep 1
 done
 [[ -n "${URL:-}" ]] || { echo "URL du tunnel introuvable" >&2; exit 1; }

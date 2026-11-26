@@ -1,0 +1,100 @@
+{
+  "id": "ToolHistoriqOrg1",
+  "name": "[TOOL] Recherche Historique Organisation",
+  "active": false,
+  "nodes": [
+    {
+      "id": "29cf09d6-91da-5595-8ed7-56b9d1176199",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "organisation_id",
+              "type": "string"
+            },
+            {
+              "name": "exclude_ticket_id",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "14bceca1-d455-5b1d-a244-ea4ad43d25e4",
+      "name": "GET historique tickets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://klocxsqzinrxnvbwxozx.supabase.co/rest/v1/tickets?select=id,titre,priorite,statut,created_at&organisation_id=eq.{{ encodeURIComponent($('When Executed by Another Workflow').first().json.organisation_id) }}&order=created_at.desc&limit=6",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "SupaServiceRole1",
+          "name": "Supabase service_role"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "7470a749-30d1-5840-89d7-29926bca83fa",
+      "name": "Agrégation compacte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// S4 TP3 — Run Once for All Items : HTTP Request a éclaté le tableau en N items.\n// On recompose UNE observation compacte pour l'agent (économie de tokens).\nconst exclude = String($('When Executed by Another Workflow').first().json.exclude_ticket_id ?? '');\nconst incidents = $input.all()\n  .map(i => i.json)\n  .filter(t => t && t.id)              // item vide {} d'Always Output Data / erreur HTTP\n  .filter(t => t.id !== exclude)       // exclusion du ticket courant (côté code : pas de 400 si vide)\n  .slice(0, 5)\n  .map(t => ({ id: t.id, titre: t.titre, priorite: t.priorite, statut: t.statut, cree_le: t.created_at }));\nreturn [{ json: { count: incidents.length, incidents } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "GET historique tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET historique tickets": {
+      "main": [
+        [
+          {
+            "node": "Agrégation compacte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "tags": []
+}

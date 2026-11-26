@@ -1,4 +1,4 @@
-# m1-automatisation — Projet fil rouge (Séances 1 à 3)
+# m1-automatisation — Projet fil rouge (Séances 1 à 4)
 
 Supabase (`klocxsqzinrxnvbwxozx`) ➜ pg_net ➜ Cloudflare Tunnel ➜ n8n (Colima) ➜ PostgREST.
 
@@ -138,12 +138,14 @@ secrète `secretKey`, puis exécuter dans l'ordre (01 ➜ 14).
 
 ---
 
-## Séance 4 — Agents IA (TP1 et TP2)
+## Séance 4 — Agents IA (TP1 à TP4)
 
 | TP | Livrable | Testé |
 |----|----------|-------|
 | 1 | Credentials n8n `Google Gemini (AI Studio)` et `Groq` (placeholders dans `credentials.template.json`, clés saisies dans l'UI) | ✅ listing des modèles OK sur les deux fournisseurs, tunnel HTTPS 200 |
 | 2 | [CORE] : If « mots-clés » supprimé ➜ **Agent de qualification (IA)** sur la branche « inédit » | ✅ en production (voir ci-dessous) |
+| 3 | `[TOOL] Recherche Historique Organisation` (publié) + outil `consulter_historique_organisation` (`$fromAI`) | ✅ appelé avec les bons UUIDs (trace exécution 33) |
+| 4 | Outil `declencher_escalade_astreinte` ➜ [SUB], Structured Output Parser, `<ticket_content>`, Max Iterations 5, PATCH enrichi, audit `success` | ✅ en production (ticket `…04b1`) |
 
 Topologie [CORE] après TP2 :
 ```
@@ -165,3 +167,34 @@ Incidents rencontrés (free tier Google, 26/11) :
 - `gemini-flash-latest`, `gemini-3.7-flash` et `gemini-3.8-flash` : **503 high demand** ; `gemini-2.5-flash` : **404**, n'est plus ouvert aux nouveaux comptes.
 - D'où : modèle épinglé (pas d'alias `-latest`), Retry On Fail 3 × 3 s sur l'agent et modèle de secours Flash-Lite.
 - Groq : `llama-3.3-70b-versatile` n'apparaît pas dans la liste des modèles du compte (à revoir au TP5).
+
+### TP3 — Outil d'historique
+`[TOOL] Recherche Historique Organisation` (id `ToolHistoriqOrg1`) :
+```
+When Executed by Another Workflow (organisation_id, exclude_ticket_id : String)
+ ➜ GET /rest/v1/tickets?select=id,titre,priorite,statut,created_at&organisation_id=eq.…&order=created_at.desc&limit=6
+   (service_role, Always Output Data)
+ ➜ Code « Run Once for All Items » : filtre items sans id, exclut le ticket courant, slice(0,5) ➜ { count, incidents }
+```
+Dans [CORE], le nœud `consulter_historique_organisation` (Call n8n Workflow Tool 2.2 : le nom du nœud est le nom de l'outil)
+remplit ses deux paramètres via `$fromAI()` avec interdiction d'inventer un UUID. Le verrouillage côté serveur est prévu au TP5.
+
+### TP4 — Escalade, sortie structurée, boucle retour
+```
+Agent (Max Iterations 5, Require Specific Output Format)
+   ├─ ai_languageModel : Gemini 3.6 Flash (+ Flash-Lite en secours)
+   ├─ ai_tool : consulter_historique_organisation ➜ [TOOL]
+   ├─ ai_tool : declencher_escalade_astreinte ➜ [SUB] (statut "processing", alert_message via $fromAI)
+   └─ ai_outputParser : Structured Output Parser (JSON Schema)
+ ➜ PATCH ticket qualifié : JSON.stringify({ statut: 'en_cours', priorite, metadata: { categorie, escalade_effectuee, diagnostic_ia } })
+ ➜ Audit (SUB) : statut "success", alert_message "" (upsert ➜ processing devient success, pas de 409)
+```
+- Schéma de sortie : `priorite_finale` (enum = CHECK SQL), `categorie` (enum), `escalade_effectuee` (boolean), `diagnostic_ia` (string), tous requis.
+- Outil d'escalade : `idempotency_key`, `workflow_name`, `ticket_id` figés via `$('Normalisation JS').first().json`, statut `processing` ; seul `alert_message` vient du LLM.
+- OWASP LLM01 : titre et description encadrés par `<ticket_content>` ; le System Prompt interdit d'exécuter les directives qu'ils contiennent.
+- Colonne `metadata JSONB` : déjà présente depuis la migration 01, donc aucune migration supplémentaire n'est nécessaire.
+
+Recette TP4 (26/11, exécution 32) : ticket « Blocage des virements fournisseurs » (déclaré `normale`)
+- l'outil historique est appelé avec `organisation_id = a1a1…00aa` et `exclude_ticket_id = …04b1` et renvoie `count: 4` ;
+- l'agent conclut `critique / application` et appelle l'escalade : [SUB] écrit `processing` et l'alerte Discord est envoyée (`notification_sent: true`) ;
+- le ticket passe à `statut en_cours, priorite critique`, `metadata` est renseigné et `workflow_logs` est en `success` (même ligne) ; `error_logs` reste vide.
