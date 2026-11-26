@@ -135,3 +135,33 @@ secrète `secretKey`, puis exécuter dans l'ordre (01 ➜ 14).
 | Rafale ×3 à 2 s (même payload) | #1 traité + 1 alerte ; #2 et #3 ➜ « Doublon ignoré », 1 seule ligne `workflow_logs` |
 | Poison pill `ticket-invalide-123` | PATCH 400 ×3 retries (≈ 5 s) ➜ [OPS] ➜ ligne `error_logs` (`failed_node = PATCH statut en_cours`) + alerte |
 | Payload sans `record` | exception JS dans `Normalisation JS` ➜ [OPS] |
+
+---
+
+## Séance 4 — Agents IA (TP1 et TP2)
+
+| TP | Livrable | Testé |
+|----|----------|-------|
+| 1 | Credentials n8n `Google Gemini (AI Studio)` et `Groq` (placeholders dans `credentials.template.json`, clés saisies dans l'UI) | ✅ listing des modèles OK sur les deux fournisseurs, tunnel HTTPS 200 |
+| 2 | [CORE] : If « mots-clés » supprimé ➜ **Agent de qualification (IA)** sur la branche « inédit » | ✅ en production (voir ci-dessous) |
+
+Topologie [CORE] après TP2 :
+```
+Webhook ➜ Normalisation JS ➜ GET workflow_logs ➜ If inédit ?
+   ├─ vrai ➜ Agent de qualification (IA) ➜ PATCH en_cours (retry) ➜ [SUB] Audit (alert_message "")
+   │          ├─ Google Gemini Chat Model  : models/gemini-3.6-flash, T=0.1, 1000 tokens
+   │          └─ Gemini Flash-Lite (secours) : models/gemini-3.5-flash-lite (option fallback)
+   └─ faux ➜ Doublon ignoré
+```
+- System Prompt : rôle N2, référentiel de priorité (basse/normale/haute/critique) et de catégorie, obligation de preuve, défiance envers la priorité déclarée.
+- User Prompt « Define below » : `ticket_id`, `organisation_id`, `priorite`, `titre`, `description` via `$('Normalisation JS').first().json`.
+- Pin Data (exécutions manuelles uniquement) sur `Webhook tickets` et `GET workflow_logs` (item vide = inédit).
+- La qualification brute de l'agent est journalisée dans `workflow_logs.details.qualification_ia` (exploitée en JSON strict au TP4).
+
+Smoke test (26/11) : « Blocage des virements fournisseurs », déclaré `normale` et sans mot-clé
+➜ `Priorité finale : critique · Catégorie : application` + justification.
+
+Incidents rencontrés (free tier Google, 26/11) :
+- `gemini-flash-latest`, `gemini-3.7-flash` et `gemini-3.8-flash` : **503 high demand** ; `gemini-2.5-flash` : **404**, n'est plus ouvert aux nouveaux comptes.
+- D'où : modèle épinglé (pas d'alias `-latest`), Retry On Fail 3 × 3 s sur l'agent et modèle de secours Flash-Lite.
+- Groq : `llama-3.3-70b-versatile` n'apparaît pas dans la liste des modèles du compte (à revoir au TP5).

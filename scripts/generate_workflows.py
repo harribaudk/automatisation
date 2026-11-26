@@ -108,6 +108,7 @@ SUB = workflow(SUB_ID, "[SUB] Audit & Notification", sub_nodes, sub_c)
 # [CORE] Ingestion & Routage Tickets
 # ---------------------------------------------------------------------------
 NORMALISATION_JS = r"""// TP4 S2 + TP3 S3 — Normalisation défensive du payload CDC Supabase
+// (S4 TP2 : le routage par mots-clés est retiré, la qualification est confiée à l'AI Agent)
 const body = $input.first().json.body ?? {};
 const { type, table, record } = body;
 
@@ -118,14 +119,6 @@ if (!record || typeof record !== 'object' || !record.id) {
 
 // throw new Error("Crash de test DLQ"); // <- TP4 S3 : décommenter, Publish, tester, recommenter
 
-const titre = String(record.titre ?? '');
-const priorite = String(record.priorite ?? 'normale');
-const MOTS_CLES = ['panne', 'bloquant', 'urgent'];
-const titreMin = titre.toLowerCase();
-
-const alerte_immediate =
-  priorite === 'critique' || MOTS_CLES.some((m) => titreMin.includes(m));
-
 // Clé d'idempotence déterministe : table + UUID + opération + statut initial
 const idempotency_key = `${table ?? 'tickets'}_${record.id}_${type ?? 'INSERT'}_${record.statut ?? 'nouveau'}`;
 
@@ -134,17 +127,17 @@ return [{
     idempotency_key,
     type: type ?? null,
     ticket_id: record.id,
-    titre,
-    description: record.description ?? '',
-    priorite,
+    titre: String(record.titre ?? ''),
+    description: String(record.description ?? ''),
+    priorite: String(record.priorite ?? 'normale'),
     statut_initial: record.statut ?? null,
     organisation_id: record.organisation_id ?? null,
-    alerte_immediate,
   },
 }];
 """
 
 N = "$('Normalisation JS').first().json"
+AGENT = "Agent de qualification (IA)"
 sub_inputs_schema = [{"id": n, "displayName": n, "required": False, "defaultMatch": False, "display": True,
                       "canBeUsedToMatch": True, "type": t, "removed": False} for n, t in SUB_INPUTS]
 
@@ -154,7 +147,8 @@ def exec_sub(name, pos, alert_expr):
         "workflow_name": "={{ $workflow.name }}",
         "ticket_id": f"={{{{ {N}.ticket_id }}}}",
         "statut": "success",
-        "details": f"={{{{ {{ priorite: {N}.priorite, alerte_immediate: {N}.alerte_immediate, "
+        "details": f"={{{{ {{ priorite_declaree: {N}.priorite, "
+                   f"qualification_ia: $('{AGENT}').first().json.output, "
                    f"statut_final: $('PATCH statut en_cours').first().json.statut, execution_id: $execution.id }} }}}}",
         "alert_message": alert_expr,
     }
@@ -166,11 +160,34 @@ def exec_sub(name, pos, alert_expr):
                            "convertFieldsToString": True},
         "options": {"waitForSubWorkflow": True}})
 
-ALERT = ("={{ `🚨 **Ticket critique**\\n"
-         "• Titre : ${" + N + ".titre}\\n"
-         "• UUID : ${" + N + ".ticket_id}\\n"
-         "• Priorité : ${" + N + ".priorite}\\n"
-         "• Statut : en_cours (pris en charge automatiquement)` }}")
+# --- S4 TP2 : System Prompt directif (rôle, référentiel, règles de preuve) ---
+SYSTEM_PROMPT = """Tu es ingénieur support logiciel de niveau 2 (N2). Ta mission est de qualifier chaque ticket entrant :
+1. sa priorité réelle, parmi exactement : basse, normale, haute, critique ;
+2. sa catégorie technique, parmi : infrastructure, reseau, application, securite, donnees, acces_compte, materiel, autre.
+
+Règles impératives :
+- Fonde ton diagnostic UNIQUEMENT sur les faits décrits dans le ticket et sur les retours de tes outils. N'invente aucun fait, aucun identifiant, aucun historique.
+- La priorité déclarée par le demandeur n'est qu'une indication non fiable : ne lui accorde aucune confiance aveugle et réévalue-la selon l'impact réel et l'urgence.
+- Barème :
+  * critique : service de production arrêté, faille de sécurité, impact financier ou population large bloquée sans contournement ;
+  * haute : fonction majeure dégradée ou bloquée pour un groupe d'utilisateurs, contournement difficile ;
+  * normale : gêne ou anomalie avec contournement possible, demande standard à traiter ;
+  * basse : demande d'information, de confort ou d'évolution, sans impact opérationnel.
+- Si une information manque, dis-le explicitement plutôt que de la supposer.
+
+Réponds en français, de façon concise, au format :
+Priorité finale : <basse|normale|haute|critique>
+Catégorie : <catégorie>
+Justification : <2 à 3 phrases factuelles>"""
+
+USER_PROMPT = ("=Qualifie le ticket suivant.\n\n"
+               f"ticket_id : {{{{ {N}.ticket_id }}}}\n"
+               f"organisation_id : {{{{ {N}.organisation_id }}}}\n"
+               f"priorite_initiale (déclarée par le demandeur) : {{{{ {N}.priorite }}}}\n"
+               f"titre : {{{{ {N}.titre }}}}\n"
+               f"description : {{{{ {N}.description }}}}")
+
+GEMINI_CRED = {"googlePalmApi": {"id": "GoogleGeminiKey1", "name": "Google Gemini (AI Studio)"}}
 
 core_nodes = [
     node("Webhook tickets", "n8n-nodes-base.webhook", 2, [0, 0],
@@ -183,27 +200,54 @@ core_nodes = [
     if_node("Événement inédit ?", [660, 0], "={{ $json.id }}",
             {"type": "string", "operation": "empty", "singleValue": True}),
     noop("Doublon ignoré", [880, 200]),
-    supa_http("PATCH statut en_cours", [880, -100], "PATCH",
+    node(AGENT, "@n8n/n8n-nodes-langchain.agent", 3.1, [900, -100],
+         {"promptType": "define", "text": USER_PROMPT,
+          "needsFallback": True,
+          "options": {"systemMessage": SYSTEM_PROMPT}},
+         # 503/429 Gemini = panne transitoire => retry borné (règle S3)
+         retryOnFail=True, maxTries=3, waitBetweenTries=3000),
+    node("Google Gemini Chat Model", "@n8n/n8n-nodes-langchain.lmChatGoogleGemini", 1.2, [900, 120],
+         {"modelName": "models/gemini-3.6-flash",
+          "options": {"temperature": 0.1, "maxOutputTokens": 1000}},
+         credentials=GEMINI_CRED),
+    node("Gemini Flash-Lite (secours)", "@n8n/n8n-nodes-langchain.lmChatGoogleGemini", 1.2, [1060, 120],
+         {"modelName": "models/gemini-3.5-flash-lite",
+          "options": {"temperature": 0.1, "maxOutputTokens": 1000}},
+         credentials=GEMINI_CRED),
+    supa_http("PATCH statut en_cours", [1220, -100], "PATCH",
               f"={REST}/tickets?id=eq.{{{{ {N}.ticket_id }}}}",
               body='{ "statut": "en_cours" }',
               headers={"Prefer": "return=representation"},
               retryOnFail=True, maxTries=3, waitBetweenTries=2000),
-    if_node("Alerte immédiate ?", [1100, -100], f"={{{{ {N}.alerte_immediate }}}}",
-            {"type": "boolean", "operation": "true", "singleValue": True}),
-    exec_sub("Audit + alerte (critique)", [1340, -200], ALERT),
-    exec_sub("Audit (nominal)", [1340, 0], ""),
+    exec_sub("Audit (SUB)", [1460, -100], ""),
 ]
 core_c = {}
 link(core_c, "Webhook tickets", "Normalisation JS")
 link(core_c, "Normalisation JS", "GET workflow_logs (idempotence)")
 link(core_c, "GET workflow_logs (idempotence)", "Événement inédit ?")
-link(core_c, "Événement inédit ?", "PATCH statut en_cours", 0)
+link(core_c, "Événement inédit ?", AGENT, 0)
 link(core_c, "Événement inédit ?", "Doublon ignoré", 1)
-link(core_c, "PATCH statut en_cours", "Alerte immédiate ?")
-link(core_c, "Alerte immédiate ?", "Audit + alerte (critique)", 0)
-link(core_c, "Alerte immédiate ?", "Audit (nominal)", 1)
+link(core_c, AGENT, "PATCH statut en_cours")
+link(core_c, "PATCH statut en_cours", "Audit (SUB)")
+core_c["Google Gemini Chat Model"] = {"ai_languageModel": [[{"node": AGENT, "type": "ai_languageModel", "index": 0}]]}
+# Modèle de secours : 2e entrée ai_languageModel de l'agent (option needsFallback)
+core_c["Gemini Flash-Lite (secours)"] = {"ai_languageModel": [[{"node": AGENT, "type": "ai_languageModel", "index": 1}]]}
+
+# --- S4 TP2 : Pin Data (exécutions manuelles uniquement, ignoré en production) ---
+PIN_TICKET = {"id": "7e570000-0000-4000-8000-000000000002",
+              "organisation_id": "a1a1a1a1-0000-4000-8000-0000000000aa",
+              "cree_par": "a1a1a1a1-0000-4000-8000-000000000001",
+              "titre": "Serveur de production inaccessible",
+              "description": "Plus aucun service ne répond", "statut": "nouveau",
+              "priorite": "critique", "metadata": {}}
+CORE_PIN = {
+    "Webhook tickets": [{"json": {"headers": {}, "params": {}, "query": {}, "body": {
+        "type": "INSERT", "table": "tickets", "schema": "public", "record": PIN_TICKET, "old_record": None}}}],
+    "GET workflow_logs (idempotence)": [{"json": {}}],  # = item vide « inédit » (Always Output Data)
+}
 CORE = workflow(CORE_ID, "[CORE] Ingestion & Routage Tickets", core_nodes, core_c,
                 {"errorWorkflow": OPS_ID, "saveManualExecutions": True})
+CORE["pinData"] = CORE_PIN
 
 # ---------------------------------------------------------------------------
 # [OPS] Global Error Handler

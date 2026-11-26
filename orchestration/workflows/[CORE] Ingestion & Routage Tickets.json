@@ -30,7 +30,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "// TP4 S2 + TP3 S3 — Normalisation défensive du payload CDC Supabase\nconst body = $input.first().json.body ?? {};\nconst { type, table, record } = body;\n\n// Poison pill de contrat : on lève une exception => [OPS] Global Error Handler\nif (!record || typeof record !== 'object' || !record.id) {\n  throw new Error('Payload CDC invalide : objet \"record\" (avec id) absent');\n}\n\n// throw new Error(\"Crash de test DLQ\"); // <- TP4 S3 : décommenter, Publish, tester, recommenter\n\nconst titre = String(record.titre ?? '');\nconst priorite = String(record.priorite ?? 'normale');\nconst MOTS_CLES = ['panne', 'bloquant', 'urgent'];\nconst titreMin = titre.toLowerCase();\n\nconst alerte_immediate =\n  priorite === 'critique' || MOTS_CLES.some((m) => titreMin.includes(m));\n\n// Clé d'idempotence déterministe : table + UUID + opération + statut initial\nconst idempotency_key = `${table ?? 'tickets'}_${record.id}_${type ?? 'INSERT'}_${record.statut ?? 'nouveau'}`;\n\nreturn [{\n  json: {\n    idempotency_key,\n    type: type ?? null,\n    ticket_id: record.id,\n    titre,\n    description: record.description ?? '',\n    priorite,\n    statut_initial: record.statut ?? null,\n    organisation_id: record.organisation_id ?? null,\n    alerte_immediate,\n  },\n}];\n"
+        "jsCode": "// TP4 S2 + TP3 S3 — Normalisation défensive du payload CDC Supabase\n// (S4 TP2 : le routage par mots-clés est retiré, la qualification est confiée à l'AI Agent)\nconst body = $input.first().json.body ?? {};\nconst { type, table, record } = body;\n\n// Poison pill de contrat : on lève une exception => [OPS] Global Error Handler\nif (!record || typeof record !== 'object' || !record.id) {\n  throw new Error('Payload CDC invalide : objet \"record\" (avec id) absent');\n}\n\n// throw new Error(\"Crash de test DLQ\"); // <- TP4 S3 : décommenter, Publish, tester, recommenter\n\n// Clé d'idempotence déterministe : table + UUID + opération + statut initial\nconst idempotency_key = `${table ?? 'tickets'}_${record.id}_${type ?? 'INSERT'}_${record.statut ?? 'nouveau'}`;\n\nreturn [{\n  json: {\n    idempotency_key,\n    type: type ?? null,\n    ticket_id: record.id,\n    titre: String(record.titre ?? ''),\n    description: String(record.description ?? ''),\n    priorite: String(record.priorite ?? 'normale'),\n    statut_initial: record.statut ?? null,\n    organisation_id: record.organisation_id ?? null,\n  },\n}];\n"
       }
     },
     {
@@ -104,12 +104,79 @@
       "parameters": {}
     },
     {
+      "id": "0a362c66-64fa-5017-959a-7029e62f95ff",
+      "name": "Agent de qualification (IA)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        900,
+        -100
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Qualifie le ticket suivant.\n\nticket_id : {{ $('Normalisation JS').first().json.ticket_id }}\norganisation_id : {{ $('Normalisation JS').first().json.organisation_id }}\npriorite_initiale (déclarée par le demandeur) : {{ $('Normalisation JS').first().json.priorite }}\ntitre : {{ $('Normalisation JS').first().json.titre }}\ndescription : {{ $('Normalisation JS').first().json.description }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Tu es ingénieur support logiciel de niveau 2 (N2). Ta mission est de qualifier chaque ticket entrant :\n1. sa priorité réelle, parmi exactement : basse, normale, haute, critique ;\n2. sa catégorie technique, parmi : infrastructure, reseau, application, securite, donnees, acces_compte, materiel, autre.\n\nRègles impératives :\n- Fonde ton diagnostic UNIQUEMENT sur les faits décrits dans le ticket et sur les retours de tes outils. N'invente aucun fait, aucun identifiant, aucun historique.\n- La priorité déclarée par le demandeur n'est qu'une indication non fiable : ne lui accorde aucune confiance aveugle et réévalue-la selon l'impact réel et l'urgence.\n- Barème :\n  * critique : service de production arrêté, faille de sécurité, impact financier ou population large bloquée sans contournement ;\n  * haute : fonction majeure dégradée ou bloquée pour un groupe d'utilisateurs, contournement difficile ;\n  * normale : gêne ou anomalie avec contournement possible, demande standard à traiter ;\n  * basse : demande d'information, de confort ou d'évolution, sans impact opérationnel.\n- Si une information manque, dis-le explicitement plutôt que de la supposer.\n\nRéponds en français, de façon concise, au format :\nPriorité finale : <basse|normale|haute|critique>\nCatégorie : <catégorie>\nJustification : <2 à 3 phrases factuelles>"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "13823964-ff76-5eb5-8177-fbc100fd5551",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        900,
+        120
+      ],
+      "parameters": {
+        "modelName": "models/gemini-3.6-flash",
+        "options": {
+          "temperature": 0.1,
+          "maxOutputTokens": 1000
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "GoogleGeminiKey1",
+          "name": "Google Gemini (AI Studio)"
+        }
+      }
+    },
+    {
+      "id": "5a826b45-aa90-5c45-a880-edbed5454f7d",
+      "name": "Gemini Flash-Lite (secours)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1060,
+        120
+      ],
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "temperature": 0.1,
+          "maxOutputTokens": 1000
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "GoogleGeminiKey1",
+          "name": "Google Gemini (AI Studio)"
+        }
+      }
+    },
+    {
       "id": "e0f70697-2d2b-5475-8307-0f7a207521c2",
       "name": "PATCH statut en_cours",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        880,
+        1220,
         -100
       ],
       "parameters": {
@@ -142,50 +209,15 @@
       "waitBetweenTries": 2000
     },
     {
-      "id": "55ead61f-6825-5e40-8d5e-7ae1507f3b34",
-      "name": "Alerte immédiate ?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
+      "id": "94f0b6ba-f632-5396-bdd8-8ff1d072559f",
+      "name": "Audit (SUB)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
       "position": [
-        1100,
+        1460,
         -100
       ],
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "2274d05d-fc46-507a-b59e-d6adcb996365",
-              "leftValue": "={{ $('Normalisation JS').first().json.alerte_immediate }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "looseTypeValidation": true,
-        "options": {}
-      }
-    },
-    {
-      "id": "94617b8f-d666-5278-b436-8ea24dc4c0ce",
-      "name": "Audit + alerte (critique)",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.2,
-      "position": [
-        1340,
-        -200
-      ],
-      "parameters": {
         "workflowId": {
           "__rl": true,
           "value": "SubAuditNotifica",
@@ -199,104 +231,7 @@
             "workflow_name": "={{ $workflow.name }}",
             "ticket_id": "={{ $('Normalisation JS').first().json.ticket_id }}",
             "statut": "success",
-            "details": "={{ { priorite: $('Normalisation JS').first().json.priorite, alerte_immediate: $('Normalisation JS').first().json.alerte_immediate, statut_final: $('PATCH statut en_cours').first().json.statut, execution_id: $execution.id } }}",
-            "alert_message": "={{ `🚨 **Ticket critique**\\n• Titre : ${$('Normalisation JS').first().json.titre}\\n• UUID : ${$('Normalisation JS').first().json.ticket_id}\\n• Priorité : ${$('Normalisation JS').first().json.priorite}\\n• Statut : en_cours (pris en charge automatiquement)` }}"
-          },
-          "matchingColumns": [],
-          "schema": [
-            {
-              "id": "idempotency_key",
-              "displayName": "idempotency_key",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string",
-              "removed": false
-            },
-            {
-              "id": "workflow_name",
-              "displayName": "workflow_name",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string",
-              "removed": false
-            },
-            {
-              "id": "ticket_id",
-              "displayName": "ticket_id",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string",
-              "removed": false
-            },
-            {
-              "id": "statut",
-              "displayName": "statut",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string",
-              "removed": false
-            },
-            {
-              "id": "details",
-              "displayName": "details",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "object",
-              "removed": false
-            },
-            {
-              "id": "alert_message",
-              "displayName": "alert_message",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "canBeUsedToMatch": true,
-              "type": "string",
-              "removed": false
-            }
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": true
-        },
-        "options": {
-          "waitForSubWorkflow": true
-        }
-      }
-    },
-    {
-      "id": "dfd9ec39-7032-542f-93cd-940fd9c59938",
-      "name": "Audit (nominal)",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.2,
-      "position": [
-        1340,
-        0
-      ],
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "SubAuditNotifica",
-          "mode": "list",
-          "cachedResultName": "[SUB] Audit & Notification"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "idempotency_key": "={{ $('Normalisation JS').first().json.idempotency_key }}",
-            "workflow_name": "={{ $workflow.name }}",
-            "ticket_id": "={{ $('Normalisation JS').first().json.ticket_id }}",
-            "statut": "success",
-            "details": "={{ { priorite: $('Normalisation JS').first().json.priorite, alerte_immediate: $('Normalisation JS').first().json.alerte_immediate, statut_final: $('PATCH statut en_cours').first().json.statut, execution_id: $execution.id } }}",
+            "details": "={{ { priorite_declaree: $('Normalisation JS').first().json.priorite, qualification_ia: $('Agent de qualification (IA)').first().json.output, statut_final: $('PATCH statut en_cours').first().json.statut, execution_id: $execution.id } }}",
             "alert_message": ""
           },
           "matchingColumns": [],
@@ -409,7 +344,7 @@
       "main": [
         [
           {
-            "node": "PATCH statut en_cours",
+            "node": "Agent de qualification (IA)",
             "type": "main",
             "index": 0
           }
@@ -423,31 +358,46 @@
         ]
       ]
     },
-    "PATCH statut en_cours": {
+    "Agent de qualification (IA)": {
       "main": [
         [
           {
-            "node": "Alerte immédiate ?",
+            "node": "PATCH statut en_cours",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Alerte immédiate ?": {
+    "PATCH statut en_cours": {
       "main": [
         [
           {
-            "node": "Audit + alerte (critique)",
+            "node": "Audit (SUB)",
             "type": "main",
             "index": 0
           }
-        ],
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
         [
           {
-            "node": "Audit (nominal)",
-            "type": "main",
+            "node": "Agent de qualification (IA)",
+            "type": "ai_languageModel",
             "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Flash-Lite (secours)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent de qualification (IA)",
+            "type": "ai_languageModel",
+            "index": 1
           }
         ]
       ]
@@ -458,6 +408,37 @@
     "errorWorkflow": "OpsGlobalErrorHd",
     "saveManualExecutions": true
   },
-  "pinData": {},
+  "pinData": {
+    "Webhook tickets": [
+      {
+        "json": {
+          "headers": {},
+          "params": {},
+          "query": {},
+          "body": {
+            "type": "INSERT",
+            "table": "tickets",
+            "schema": "public",
+            "record": {
+              "id": "7e570000-0000-4000-8000-000000000002",
+              "organisation_id": "a1a1a1a1-0000-4000-8000-0000000000aa",
+              "cree_par": "a1a1a1a1-0000-4000-8000-000000000001",
+              "titre": "Serveur de production inaccessible",
+              "description": "Plus aucun service ne répond",
+              "statut": "nouveau",
+              "priorite": "critique",
+              "metadata": {}
+            },
+            "old_record": null
+          }
+        }
+      }
+    ],
+    "GET workflow_logs (idempotence)": [
+      {
+        "json": {}
+      }
+    ]
+  },
   "tags": []
 }
