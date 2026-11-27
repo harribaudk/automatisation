@@ -9,6 +9,7 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "orchestration" / "workfl
 
 CORE_ID, SUB_ID, OPS_ID = "CoreTicketsIngst", "SubAuditNotifica", "OpsGlobalErrorHd"
 TOOL_ID = "ToolHistoriqOrg1"
+MCP_SRV_ID = "McpSrvCapaSupp01"
 SUPA_CRED = {"supabaseApi": {"id": "SupaServiceRole1", "name": "Supabase service_role"}}
 DISCORD_CRED = {"discordWebhookApi": {"id": "DiscordAstreinte", "name": "Discord astreinte"}}
 
@@ -414,8 +415,62 @@ link(ops_c, "Diagnostic JS", "Alerte astreinte Discord")  # Discord alerté mêm
 link(ops_c, "POST error_logs (DLQ)", "DLQ indisponible", 1)
 OPS = workflow(OPS_ID, "[OPS] Global Error Handler", ops_nodes, ops_c)
 
+# ---------------------------------------------------------------------------
+# [MCP] Serveur Capacites Support (S5 TP3) : n8n en SERVEUR MCP
+# Expose 2 capacités métier encapsulées (pas de SQL brut) derrière un Bearer.
+# ---------------------------------------------------------------------------
+# Pas d'apostrophe échappée (\') dans les descriptions $fromAI : le parseur n8n y voit une fin de chaîne
+# (« Unbalanced parentheses while parsing $fromAI call ») => apostrophe typographique ’.
+MCP_BEARER_CRED = {"httpBearerAuth": {"id": "McpServerBearer1", "name": "MCP serveur capacités (Bearer)"}}
+UUID_HINT = "UUID v4 exact (ex. 7e570000-0000-4000-8000-0000000004b1). Ne jamais deviner ni inventer cette valeur."
+FA_TICKET = "$fromAI('ticket_id', 'UUID du ticket à escalader. " + UUID_HINT + "', 'string')"
+FA_MOTIF = "$fromAI('motif', 'Motif de l’escalade en une phrase factuelle (symptôme, impact).', 'string')"
+MCP_INSTRUCTIONS = ("Serveur MCP du support N2. Outils métier encapsulés, sans accès SQL. "
+                    "bilan_incidents_organisation : lecture seule, à utiliser avant toute escalade. "
+                    "escalader_ticket_astreinte : ACTION à effet de bord (alerte d'astreinte + journalisation dans "
+                    "workflow_logs) ; un seul appel par incident, uniquement sur demande explicite d'un opérateur.")
+mcp_nodes = [
+    node("MCP Server Trigger", "@n8n/n8n-nodes-langchain.mcpTrigger", 2.1, [0, 0],
+         {"authentication": "bearerAuth", "path": "capacites-support", "instructions": MCP_INSTRUCTIONS},
+         webhookId="9b6f3c1e-5a2d-4e7f-8c10-3d5e7a9b1c42", credentials=MCP_BEARER_CRED),
+    # Lecture : réutilise [TOOL] (S4 TP3) ; projection et agrégat compact déjà faits côté serveur
+    node("bilan_incidents_organisation", "@n8n/n8n-nodes-langchain.toolWorkflow", 2.2, [-200, 240],
+         {"description": ("Bilan des 5 derniers tickets d'une organisation (id, titre, priorité, statut, date), "
+                          "renvoyé sous la forme { count, incidents }. Lecture seule, sans exposition du schéma SQL."),
+          "source": "database",
+          "workflowId": {"__rl": True, "value": TOOL_ID, "mode": "list",
+                         "cachedResultName": "[TOOL] Recherche Historique Organisation"},
+          "workflowInputs": {"mappingMode": "defineBelow", "matchingColumns": [], "attemptToConvertTypes": False,
+                             "convertFieldsToString": False,
+                             "schema": [{"id": n, "displayName": n, "required": False, "defaultMatch": False,
+                                         "display": True, "canBeUsedToMatch": True, "type": t, "removed": False}
+                                        for n, t in TOOL_INPUTS],
+                             "value": {
+              "organisation_id": "={{ $fromAI('organisation_id', 'UUID de l’organisation. " + UUID_HINT + "', 'string') }}",
+              "exclude_ticket_id": "={{ $fromAI('exclude_ticket_id', 'UUID d’un ticket à exclure du bilan, ou chaîne vide.', 'string', '') }}",
+          }}}),
+    # Action gouvernée : réutilise [SUB] (S3) => journalisation workflow_logs + alerte Discord
+    node("escalader_ticket_astreinte", "@n8n/n8n-nodes-langchain.toolWorkflow", 2.2, [200, 240],
+         {"description": ("Escalade manuelle d'un ticket vers l'astreinte humaine : alerte Discord ET journalisation "
+                          "dans workflow_logs (traçabilité). Action à effet de bord : un seul appel par incident."),
+          "source": "database",
+          **sub_params({
+              # clé unique par exécution : chaque escalade manuelle est tracée (pas d'écrasement)
+              "idempotency_key": "={{ 'mcp_escalade_' + $execution.id }}",
+              "workflow_name": "={{ $workflow.name }}",
+              "ticket_id": "={{ " + FA_TICKET + " }}",
+              "statut": "success",
+              "details": "={{ { origine: 'mcp_externe', motif: " + FA_MOTIF + ", execution_id: $execution.id } }}",
+              "alert_message": "={{ '🛎️ Escalade manuelle (MCP) — ticket ' + " + FA_TICKET + " + ' : ' + " + FA_MOTIF + " }}",
+          })}),
+]
+mcp_c = {t: {"ai_tool": [[{"node": "MCP Server Trigger", "type": "ai_tool", "index": 0}]]}
+         for t in ("bilan_incidents_organisation", "escalader_ticket_astreinte")}
+MCP_SRV = workflow(MCP_SRV_ID, "[MCP] Serveur Capacites Support", mcp_nodes, mcp_c,
+                   {"errorWorkflow": OPS_ID})
+
 OUT.mkdir(parents=True, exist_ok=True)
-for wf in (CORE, SUB, TOOL, OPS):
+for wf in (CORE, SUB, TOOL, OPS, MCP_SRV):
     (OUT / f"{wf['name']}.json").write_text(json.dumps(wf, ensure_ascii=False, indent=2) + "\n",
                                           encoding="utf-8", newline="\n")  # idem macOS / Windows
     print("écrit :", wf["name"])

@@ -320,3 +320,41 @@ l'exécution 32 (S4 TP4).
 > réussie peut lui faire lire une autre organisation, puisque `mcp_readonly` voit toutes les organisations. Les garde-fous
 > actuels sont le prompt, la projection imposée par les privilèges et la lecture seule. Le correctif structurel, prévu
 > au TP3, consiste à exposer un outil MCP métier, dont le périmètre est fixé côté serveur, à la place du SQL libre.
+
+### TP3 — n8n en serveur MCP : `[MCP] Serveur Capacites Support`
+
+| Étape | Livrable | Statut |
+|-------|----------|--------|
+| 01 | Workflow `[MCP] Serveur Capacites Support` (id `McpSrvCapaSupp01`) : *MCP Server Trigger* 2.1, path `capacites-support`, **Bearer Auth** (credential `MCP serveur capacités (Bearer)`, jeton de 64 caractères hex généré localement, rangé dans `orchestration/.env` ➜ `MCP_SERVER_BEARER_TOKEN`), *instructions* serveur | ✅ publié |
+| 02 | `bilan_incidents_organisation` ➜ [TOOL] (S4) : lecture `{ count, incidents }`, sans schéma SQL ; `escalader_ticket_astreinte` ➜ [SUB] (S3) : alerte Discord **et** journalisation `workflow_logs` (`idempotency_key = mcp_escalade_<execution>`, `details = { origine: 'mcp_externe', motif }`) ; Error Workflow = [OPS] | ✅ publiés ([TOOL] et [SUB] aussi) |
+| 03 | Test cross-host (hôte MCP externe sur l'URL Cloudflare HTTPS) | 🟡 testé en local, voir ci-dessous ; tunnel et credentials à finaliser |
+
+Production URL : `<WEBHOOK_URL>mcp/capacites-support` (en local : `http://localhost:5678/mcp/capacites-support`).
+
+Recette locale du 27/11 (Streamable HTTP) :
+
+| Requête | Résultat |
+|---------|----------|
+| `initialize` sans `Authorization` / avec un mauvais jeton | ❌ `403 Authorization data is wrong!` (refus attendu) |
+| `initialize` avec `Authorization: Bearer <MCP_SERVER_BEARER_TOKEN>` | ✅ 200, serveur `MCP_Server_Trigger`, instructions transmises |
+| `tools/list` | ✅ `escalader_ticket_astreinte (ticket_id, motif)`, `bilan_incidents_organisation (organisation_id, exclude_ticket_id)` |
+| `tools/call bilan_incidents_organisation` (Alpha Corp) | ✅ 200 `{ count: 0, incidents: [] }` : chaîne MCP ➜ [TOOL] fonctionnelle ; résultat vide tant que la credential `Supabase service_role` de cette instance contient le placeholder |
+| `tools/call escalader_ticket_astreinte` | ⏳ non joué : nécessite les credentials Supabase et Discord réelles |
+
+> **Piège n8n `$fromAI`.** Une apostrophe échappée (`l'escalade`) dans la description d'un `$fromAI` fait échouer
+> toute la construction des outils : `Unbalanced parentheses while parsing $fromAI call`, ce qui donne une erreur 500
+> à l'`initialize`. Les descriptions du serveur MCP utilisent donc l'apostrophe typographique (’).
+
+Pour finir le TP3 :
+1. Dans n8n, renseigner les credentials `Supabase service_role` et `Discord astreinte`.
+2. Ouvrir le tunnel (`cloudflared tunnel --url http://localhost:5678`), mettre `WEBHOOK_URL` à jour, puis recréer le conteneur n8n.
+3. Brancher un hôte externe. Avec Claude Code par exemple :
+   ```bash
+   claude mcp add --transport http support-n2 https://<tunnel>.trycloudflare.com/mcp/capacites-support --header "Authorization: Bearer <MCP_SERVER_BEARER_TOKEN>"
+   ```
+   Ou dans MCP Inspector : *Streamable HTTP*, même URL, en-tête `Authorization`.
+4. Demander un bilan, puis une escalade, et vérifier la ligne dans `workflow_logs` (requête Bruno 13) :
+   `workflow_name = '[MCP] Serveur Capacites Support'`, `idempotency_key` qui commence par `mcp_escalade_`.
+
+> ⚠️ `n8n import:credentials --input=/credentials.template.json` écrase le jeton Bearer réel par le placeholder (même id).
+> Après une réimportation, réinjecter le jeton de `.env` dans la credential depuis l'UI.

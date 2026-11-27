@@ -1,0 +1,207 @@
+{
+  "id": "McpSrvCapaSupp01",
+  "name": "[MCP] Serveur Capacites Support",
+  "active": false,
+  "nodes": [
+    {
+      "id": "4a0ead12-cfbf-57d0-8510-0e7570f09a4e",
+      "name": "MCP Server Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "authentication": "bearerAuth",
+        "path": "capacites-support",
+        "instructions": "Serveur MCP du support N2. Outils métier encapsulés, sans accès SQL. bilan_incidents_organisation : lecture seule, à utiliser avant toute escalade. escalader_ticket_astreinte : ACTION à effet de bord (alerte d'astreinte + journalisation dans workflow_logs) ; un seul appel par incident, uniquement sur demande explicite d'un opérateur."
+      },
+      "webhookId": "9b6f3c1e-5a2d-4e7f-8c10-3d5e7a9b1c42",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "McpServerBearer1",
+          "name": "MCP serveur capacités (Bearer)"
+        }
+      }
+    },
+    {
+      "id": "368cd044-66d9-5212-8c72-fada5061647f",
+      "name": "bilan_incidents_organisation",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        -200,
+        240
+      ],
+      "parameters": {
+        "description": "Bilan des 5 derniers tickets d'une organisation (id, titre, priorité, statut, date), renvoyé sous la forme { count, incidents }. Lecture seule, sans exposition du schéma SQL.",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "ToolHistoriqOrg1",
+          "mode": "list",
+          "cachedResultName": "[TOOL] Recherche Historique Organisation"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false,
+          "schema": [
+            {
+              "id": "organisation_id",
+              "displayName": "organisation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "exclude_ticket_id",
+              "displayName": "exclude_ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "value": {
+            "organisation_id": "={{ $fromAI('organisation_id', 'UUID de l’organisation. UUID v4 exact (ex. 7e570000-0000-4000-8000-0000000004b1). Ne jamais deviner ni inventer cette valeur.', 'string') }}",
+            "exclude_ticket_id": "={{ $fromAI('exclude_ticket_id', 'UUID d’un ticket à exclure du bilan, ou chaîne vide.', 'string', '') }}"
+          }
+        }
+      }
+    },
+    {
+      "id": "04689d7e-55f8-5f62-983d-0802130949ce",
+      "name": "escalader_ticket_astreinte",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        240
+      ],
+      "parameters": {
+        "description": "Escalade manuelle d'un ticket vers l'astreinte humaine : alerte Discord ET journalisation dans workflow_logs (traçabilité). Action à effet de bord : un seul appel par incident.",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "SubAuditNotifica",
+          "mode": "list",
+          "cachedResultName": "[SUB] Audit & Notification"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "idempotency_key": "={{ 'mcp_escalade_' + $execution.id }}",
+            "workflow_name": "={{ $workflow.name }}",
+            "ticket_id": "={{ $fromAI('ticket_id', 'UUID du ticket à escalader. UUID v4 exact (ex. 7e570000-0000-4000-8000-0000000004b1). Ne jamais deviner ni inventer cette valeur.', 'string') }}",
+            "statut": "success",
+            "details": "={{ { origine: 'mcp_externe', motif: $fromAI('motif', 'Motif de l’escalade en une phrase factuelle (symptôme, impact).', 'string'), execution_id: $execution.id } }}",
+            "alert_message": "={{ '🛎️ Escalade manuelle (MCP) — ticket ' + $fromAI('ticket_id', 'UUID du ticket à escalader. UUID v4 exact (ex. 7e570000-0000-4000-8000-0000000004b1). Ne jamais deviner ni inventer cette valeur.', 'string') + ' : ' + $fromAI('motif', 'Motif de l’escalade en une phrase factuelle (symptôme, impact).', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "idempotency_key",
+              "displayName": "idempotency_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "workflow_name",
+              "displayName": "workflow_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "statut",
+              "displayName": "statut",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object",
+              "removed": false
+            },
+            {
+              "id": "alert_message",
+              "displayName": "alert_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        }
+      }
+    }
+  ],
+  "connections": {
+    "bilan_incidents_organisation": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Server Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "escalader_ticket_astreinte": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Server Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "OpsGlobalErrorHd"
+  },
+  "pinData": {},
+  "tags": []
+}
