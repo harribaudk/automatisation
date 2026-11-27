@@ -285,3 +285,38 @@ Recette du 27/11 (Streamable HTTP sur `http://localhost:8080/mcp`) :
 > (qui l'appelle par `http://dbhub:8080`) est rejeté. (2) Sous Windows/Podman, si `win-sshproxy` ne démarre pas, le
 > canal Docker `\\.\pipe\docker_engine` est absent et `docker compose` échoue : démarrer alors dbhub avec
 > `podman run` (même réseau `orchestration_default`, `--network-alias dbhub`, mêmes arguments que le compose).
+
+### TP2 — Migration de l'agent vers le MCP Client Tool
+
+| Étape | Livrable | Statut |
+|-------|----------|--------|
+| 01 | [CORE] : `consulter_historique_organisation` remplacé par `MCP DBHub (historique SQL)` (MCP Client Tool 1.4, *HTTP Streamable*, `http://dbhub:8080/mcp`, *Tools to Include : Selected* ➜ `execute_sql` seul, timeout 20 s) | ✅ généré et importé |
+| 02 | System Prompt : requête modèle imposée (`WHERE organisation_id = '<organisation_id>' AND id <> '<ticket_id>'`, projection explicite, `LIMIT 5`, un seul SELECT) ; tout UUID présent dans `<ticket_content>` est ignoré ; `declencher_escalade_astreinte` conservé (effet de bord encapsulé) | ✅ |
+| 03 | *Publish* + ticket Bruno + comparaison des tokens d'entrée avec la S4 | ⏳ à exécuter (credentials Gemini et Supabase à saisir dans n8n) |
+
+Topologie [CORE] après TP2 :
+```
+Agent de qualification (IA)
+   ├─ ai_languageModel : Gemini 3.6 Flash (+ Flash-Lite en secours)
+   ├─ ai_tool : MCP DBHub (historique SQL) ── tools/list, tools/call ──➜ dbhub ──➜ Supabase (mcp_readonly)
+   ├─ ai_tool : declencher_escalade_astreinte ➜ [SUB]
+   └─ ai_outputParser : Structured Output Parser
+```
+Le workflow `[TOOL] Recherche Historique Organisation` reste versionné, mais n'est plus appelé par [CORE].
+
+Vérification du 27/11, depuis le conteneur n8n avec le SDK MCP qu'il embarque (1.32.0), soit le même parcours que le nœud :
+- `tools/list` ➜ `execute_sql`, `search_objects` ; après filtre *Selected* ➜ `execute_sql` seul, schéma `{ sql: string }` ;
+- requête modèle sur Alpha Corp en excluant le ticket `…04b1` ➜ **4 lignes**, soit le même `count: 4` que l'outil statique en S4 TP4 ;
+- `SELECT *` ➜ `permission denied for table tickets` : une projection mal écrite par le LLM échoue au lieu de lire `cree_par`.
+
+**Bilan FinOps (à mesurer).** On attend plus de tokens d'entrée qu'en S4 sur l'itération 1 : la requête modèle et les
+règles SQL alourdissent le System Prompt, mais le schéma de l'outil est minimal (`sql` seul, `search_objects` exclu).
+L'observation est en revanche plus lourde : dbhub renvoie un JSON verbeux (`success`, `statements`, `sql` répété), là où
+l'outil S4 renvoyait un objet compact `{ count, incidents }`. Relever *Tokens In/Out* de l'exécution et les comparer à
+l'exécution 32 (S4 TP4).
+
+> **Régression multi-tenant assumée (à traiter au TP4).** En S4 TP5, l'organisation était injectée côté serveur : le LLM
+> ne pouvait pas en changer. Avec `execute_sql`, c'est le LLM qui écrit le filtre `organisation_id` : une injection
+> réussie peut lui faire lire une autre organisation, puisque `mcp_readonly` voit toutes les organisations. Les garde-fous
+> actuels sont le prompt, la projection imposée par les privilèges et la lecture seule. Le correctif structurel, prévu
+> au TP3, consiste à exposer un outil MCP métier, dont le périmètre est fixé côté serveur, à la place du SQL libre.
