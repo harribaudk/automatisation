@@ -35,7 +35,10 @@ services:
       - "127.0.0.1:8080:8080"
     # Lecture seule portée par le rôle PostgreSQL mcp_readonly (migration 05) :
     # SELECT par colonne + default_transaction_read_only.
-    command: ["--transport", "http", "--port", "8080", "--dsn", "${MCP_READONLY_DB_URL}"]
+    # --allowed-hosts : dbhub rejette tout autre en-tête Host (anti DNS rebinding) ;
+    # « dbhub » est requis pour que n8n puisse l'appeler par le réseau compose.
+    command: ["--transport", "http", "--port", "8080", "--allowed-hosts", "dbhub,localhost,127.0.0.1",
+              "--dsn", "${MCP_READONLY_DB_URL}"]
 
 volumes:
   n8n_data:

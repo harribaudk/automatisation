@@ -235,9 +235,9 @@ Déroulé de la recette (n8n publié, credentials renseignés, tunnel actif) :
 
 | Étape | Livrable | Statut |
 |-------|----------|--------|
-| 01 | `…_05_role_mcp_readonly.sql` (énoncé : « 04 », déjà pris) : rôle `mcp_readonly` NOLOGIN, `USAGE public`, SELECT **par colonne** sur `organisations (id, nom, created_at)` et `tickets` (sans `cree_par`), policies RLS `FOR SELECT TO mcp_readonly`, `default_transaction_read_only = on`, `statement_timeout = 10s` | écrite, `db push` à faire |
-| 02 | Service `dbhub` dans `docker-compose.yml` (`--transport http`, `127.0.0.1:8080:8080`, même réseau que n8n ➜ `http://dbhub:8080/mcp`) ; `MCP_READONLY_DB_URL` dans `.env.example` | fait |
-| 03 | Recette MCP Inspector | transport validé en mode `--demo` (`initialize` ➜ DBHub 2.1.0, `tools/list` ➜ `execute_sql`, `search_objects`) ; à refaire sur Supabase |
+| 01 | `…_05_role_mcp_readonly.sql` (énoncé : « 04 », déjà pris) : rôle `mcp_readonly` NOLOGIN, `USAGE public`, SELECT **par colonne** sur `organisations (id, nom, created_at)` et `tickets` (sans `cree_par`), policies RLS `FOR SELECT TO mcp_readonly`, `default_transaction_read_only = on`, `statement_timeout = 10s` | ✅ appliquée (`db push` du 27/11), mot de passe défini hors Git |
+| 02 | Service `dbhub` dans `docker-compose.yml` (`--transport http`, `127.0.0.1:8080:8080`, même réseau que n8n ➜ `http://dbhub:8080/mcp`, `--allowed-hosts dbhub,localhost,127.0.0.1`) ; `MCP_READONLY_DB_URL` dans `.env.example` | ✅ dbhub connecté via `aws-0-eu-west-1.pooler.supabase.com:5432` ; joignable depuis le conteneur n8n (200) |
+| 03 | Recette protocolaire (mêmes échanges JSON-RPC que MCP Inspector, scriptés) | ✅ voir le tableau ci-dessous |
 
 Exclus du périmètre MCP : `profils` (données personnelles), `tickets.cree_par`, `workflow_logs`, `error_logs`,
 les schémas `auth`, `private` et `storage`, et toute écriture.
@@ -269,5 +269,19 @@ puis `execute_sql` avec un SELECT projeté :
 ```sql
 SELECT id, titre, statut, priorite, created_at FROM public.tickets ORDER BY created_at DESC LIMIT 5;
 ```
-Contre-tests attendus : `SELECT cree_par FROM public.tickets` ➜ *permission denied* ; `SELECT * FROM public.error_logs`
-➜ *permission denied* ; `UPDATE public.tickets SET statut = 'ferme'` ➜ *cannot execute UPDATE in a read-only transaction*.
+Recette du 27/11 (Streamable HTTP sur `http://localhost:8080/mcp`) :
+
+| Requête via `execute_sql` | Résultat (✅ lecture autorisée · ❌ refus attendu, obtenu) |
+|---------------------------|----------|
+| `initialize` / `notifications/initialized` / `tools/list` | DBHub 2.1.0, protocole `2025-06-18`, 202, outils `execute_sql` (`readOnlyHint=false`) et `search_objects` (`readOnlyHint=true`) |
+| `SELECT id, titre, statut, priorite, created_at FROM public.tickets …` | ✅ 5 lignes (dont « Blocage des virements fournisseurs », `critique`) |
+| `SELECT id, nom FROM public.organisations` | ✅ « Alpha Corp » |
+| `SELECT cree_par …` / `SELECT * FROM public.tickets` | ❌ `permission denied for table tickets` (privilèges par colonne) |
+| `profils`, `workflow_logs`, `error_logs` | ❌ `permission denied for table …` |
+| `auth.users`, `private.app_config` | ❌ `permission denied for schema …` |
+| `UPDATE public.tickets …` (même après `SET default_transaction_read_only = off`) | ❌ `cannot execute UPDATE in a read-only transaction` |
+
+> **Pièges rencontrés.** (1) dbhub n'accepte que les en-têtes `Host` autorisés : sans `--allowed-hosts dbhub,…`, n8n
+> (qui l'appelle par `http://dbhub:8080`) est rejeté. (2) Sous Windows/Podman, si `win-sshproxy` ne démarre pas, le
+> canal Docker `\\.\pipe\docker_engine` est absent et `docker compose` échoue : démarrer alors dbhub avec
+> `podman run` (même réseau `orchestration_default`, `--network-alias dbhub`, mêmes arguments que le compose).
