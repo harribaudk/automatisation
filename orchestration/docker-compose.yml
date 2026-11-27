@@ -24,5 +24,18 @@ services:
       - ./workflows:/workflows:ro
       - ./credentials.template.json:/credentials.template.json:ro
 
+  # S5 TP1 : serveur MCP PostgreSQL cloisonné (Streamable HTTP, endpoint /mcp)
+  # Joignable par n8n sur le réseau compose : http://dbhub:8080/mcp
+  # Depuis le poste (MCP Inspector) : http://localhost:8080/mcp (bind local uniquement)
+  dbhub:
+    image: docker.io/bytebase/dbhub:latest
+    container_name: mcp_dbhub
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    # Lecture seule portée par le rôle PostgreSQL mcp_readonly (migration 05) :
+    # SELECT par colonne + default_transaction_read_only.
+    command: ["--transport", "http", "--port", "8080", "--dsn", "${MCP_READONLY_DB_URL}"]
+
 volumes:
   n8n_data:

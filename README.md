@@ -1,10 +1,10 @@
-# m1-automatisation — Projet fil rouge (Séances 1 à 4)
+# m1-automatisation — Projet fil rouge (Séances 1 à 5)
 
 Supabase (`klocxsqzinrxnvbwxozx`) ➜ pg_net ➜ Cloudflare Tunnel ➜ n8n (Colima) ➜ PostgREST.
 
 ```
-supabase/migrations/   01 schéma · 02 RLS · 02b webhook pg_net · 03 observabilité + DLQ
-orchestration/         docker-compose.yml (n8n), .env (ignoré), workflows/*.json
+supabase/migrations/   01 schéma · 02 RLS · 02b webhook pg_net · 03 observabilité + DLQ · 05 rôle mcp_readonly
+orchestration/         docker-compose.yml (n8n + dbhub MCP), .env (ignoré), workflows/*.json
 bruno/                 cahier de recette API (21 requêtes)
 docs/                  benchmark-llm-s4.md (relevé FinOps multi-modèles)
 scripts/               tunnel-up.sh, set-webhook-url.sh, generate_workflows.py
@@ -226,3 +226,48 @@ Déroulé de la recette (n8n publié, credentials renseignés, tunnel actif) :
 
 > Sous Windows (sans Colima) : `podman machine start`, puis dans `orchestration/` : `docker-compose up -d`.
 > `scripts/generate_workflows.py` écrit désormais en UTF-8 sur toutes les plateformes.
+
+---
+
+## Séance 5 — Architecture agentique & standard MCP
+
+### TP1 — Serveur MCP PostgreSQL cloisonné (bytebase/dbhub)
+
+| Étape | Livrable | Statut |
+|-------|----------|--------|
+| 01 | `…_05_role_mcp_readonly.sql` (énoncé : « 04 », déjà pris) : rôle `mcp_readonly` NOLOGIN, `USAGE public`, SELECT **par colonne** sur `organisations (id, nom, created_at)` et `tickets` (sans `cree_par`), policies RLS `FOR SELECT TO mcp_readonly`, `default_transaction_read_only = on`, `statement_timeout = 10s` | écrite, `db push` à faire |
+| 02 | Service `dbhub` dans `docker-compose.yml` (`--transport http`, `127.0.0.1:8080:8080`, même réseau que n8n ➜ `http://dbhub:8080/mcp`) ; `MCP_READONLY_DB_URL` dans `.env.example` | fait |
+| 03 | Recette MCP Inspector | transport validé en mode `--demo` (`initialize` ➜ DBHub 2.1.0, `tools/list` ➜ `execute_sql`, `search_objects`) ; à refaire sur Supabase |
+
+Exclus du périmètre MCP : `profils` (données personnelles), `tickets.cree_par`, `workflow_logs`, `error_logs`,
+les schémas `auth`, `private` et `storage`, et toute écriture.
+
+**Pourquoi la lecture seule est portée par PostgreSQL et non par dbhub.** dbhub 2.x a supprimé l'option `--readonly`
+au profit d'un `dbhub.toml` qui n'interpole pas les variables d'environnement : il faudrait y écrire le DSN, donc le mot
+de passe, et le commiter. De plus, `execute_sql` se déclare lui-même `destructiveHint: true`. La garantie vient donc du
+rôle : il n'a que des droits SELECT par colonne, et toute transaction qu'il ouvre est en lecture seule.
+
+Mise en œuvre :
+```bash
+supabase db push
+```
+Dans le Supabase SQL Editor (hors Git) :
+```sql
+ALTER ROLE mcp_readonly WITH LOGIN PASSWORD '<mot-de-passe-fort>';
+```
+Renseigner `MCP_READONLY_DB_URL` dans `orchestration/.env`. Prendre l'hôte du **Session Pooler**
+(Project Settings ➜ Database ➜ Connection string ➜ Session pooler), avec l'utilisateur `mcp_readonly.klocxsqzinrxnvbwxozx`,
+le port 5432 et `?sslmode=require`. Puis :
+```bash
+docker compose up -d dbhub
+```
+```bash
+npx @modelcontextprotocol/inspector
+```
+Dans l'Inspector : *Streamable HTTP*, `http://localhost:8080/mcp`, *Connect* ➜ observer `initialize` et `tools/list`,
+puis `execute_sql` avec un SELECT projeté :
+```sql
+SELECT id, titre, statut, priorite, created_at FROM public.tickets ORDER BY created_at DESC LIMIT 5;
+```
+Contre-tests attendus : `SELECT cree_par FROM public.tickets` ➜ *permission denied* ; `SELECT * FROM public.error_logs`
+➜ *permission denied* ; `UPDATE public.tickets SET statut = 'ferme'` ➜ *cannot execute UPDATE in a read-only transaction*.
