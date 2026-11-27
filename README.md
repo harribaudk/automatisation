@@ -5,7 +5,8 @@ Supabase (`klocxsqzinrxnvbwxozx`) ➜ pg_net ➜ Cloudflare Tunnel ➜ n8n (Coli
 ```
 supabase/migrations/   01 schéma · 02 RLS · 02b webhook pg_net · 03 observabilité + DLQ
 orchestration/         docker-compose.yml (n8n), .env (ignoré), workflows/*.json
-bruno/                 cahier de recette API (14 requêtes)
+bruno/                 cahier de recette API (21 requêtes)
+docs/                  benchmark-llm-s4.md (relevé FinOps multi-modèles)
 scripts/               tunnel-up.sh, set-webhook-url.sh, generate_workflows.py
 ```
 
@@ -120,7 +121,7 @@ docker exec n8n_orchestrator n8n import:credentials --input=/credentials.templat
 ```
 
 Bruno : ouvrir le dossier `bruno/`, environnement `supabase`, renseigner la variable
-secrète `secretKey`, puis exécuter dans l'ordre (01 ➜ 14).
+secrète `secretKey`, puis exécuter dans l'ordre (01 ➜ 21).
 
 ---
 
@@ -138,7 +139,7 @@ secrète `secretKey`, puis exécuter dans l'ordre (01 ➜ 14).
 
 ---
 
-## Séance 4 — Agents IA (TP1 à TP4)
+## Séance 4 — Agents IA (TP1 à TP5)
 
 | TP | Livrable | Testé |
 |----|----------|-------|
@@ -177,7 +178,7 @@ When Executed by Another Workflow (organisation_id, exclude_ticket_id : String)
  ➜ Code « Run Once for All Items » : filtre items sans id, exclut le ticket courant, slice(0,5) ➜ { count, incidents }
 ```
 Dans [CORE], le nœud `consulter_historique_organisation` (Call n8n Workflow Tool 2.2 : le nom du nœud est le nom de l'outil)
-remplit ses deux paramètres via `$fromAI()` avec interdiction d'inventer un UUID. Le verrouillage côté serveur est prévu au TP5.
+remplissait ses deux paramètres via `$fromAI()` avec interdiction d'inventer un UUID. Depuis le TP5, ils sont injectés côté serveur (voir plus bas).
 
 ### TP4 — Escalade, sortie structurée, boucle retour
 ```
@@ -198,3 +199,30 @@ Recette TP4 (26/11, exécution 32) : ticket « Blocage des virements fournisseur
 - l'outil historique est appelé avec `organisation_id = a1a1…00aa` et `exclude_ticket_id = …04b1` et renvoie `count: 4` ;
 - l'agent conclut `critique / application` et appelle l'escalade : [SUB] écrit `processing` et l'alerte Discord est envoyée (`notification_sent: true`) ;
 - le ticket passe à `statut en_cours, priorite critique`, `metadata` est renseigné et `workflow_logs` est en `success` (même ligne) ; `error_logs` reste vide.
+
+### TP5 — Validation sémantique, tests adversariaux, multi-tenant et benchmark
+
+| Partie | Livrable | Statut |
+|--------|----------|--------|
+| 1 | Bruno 15-17 : urgence implicite, incident récurrent, demande nominale ; 20 vérifie la qualification (priorité attendue, `escalade_effectuee`) | requêtes prêtes, recette à exécuter |
+| 2 | Bruno 18 : Prompt Injection (OWASP LLM01) ; 21 : rejeu ×3 du dernier ticket vers l'URL de Production n8n | requêtes prêtes, recette à exécuter |
+| 3.1 | `consulter_historique_organisation` : `organisation_id` et `exclude_ticket_id` injectés via `$('Normalisation JS').first().json` (plus aucun `$fromAI` sur le périmètre) ; Bruno 19 : ticket hostile ciblant l'org `00000000-…` | workflow modifié, recette à exécuter |
+| 3.2 | Nœud `Groq Chat Model (benchmark)` (`llama-3.3-70b-versatile`) non branché dans [CORE] ; protocole et grille dans `docs/benchmark-llm-s4.md` | mesures à relever |
+
+**Durcissement multi-tenant (OWASP LLM06, Confused Deputy).** L'outil historique n'expose plus aucun paramètre au LLM :
+même une injection réussie ne peut pas lui faire lire une autre organisation. Seul `alert_message` de l'outil d'escalade
+vient encore du modèle, parce que c'est un contenu et non un périmètre d'accès.
+
+**Règle d'escalade resserrée.** « Au moins 2 incidents récents » suffisait à déclencher une escalade, même pour une simple
+demande de service, sur une organisation qui avait déjà des tickets (le scénario 3 aurait escaladé). Désormais, l'escalade
+n'a lieu que si la priorité finale est `critique`, ou si le ticket courant est lui-même un incident et que l'historique
+contient au moins 2 incidents haute/critique.
+
+Déroulé de la recette (n8n publié, credentials renseignés, tunnel actif) :
+1. *Unpin* des Pin Data de [CORE] ; vérifier que [CORE], [TOOL], [SUB] et [OPS] sont *Published*.
+2. Pour chaque scénario 15 ➜ 19 : lancer la requête, attendre ~20 s, lancer 20.
+   Pour 19, ouvrir l'exécution et vérifier l'entrée de `consulter_historique_organisation` (`organisation_id = {{orgId}}`).
+3. Après 15 : lancer 21 trois fois. Chaque exécution doit finir sur « Doublon ignoré », sans aucun nœud IA exécuté.
+
+> Sous Windows (sans Colima) : `podman machine start`, puis dans `orchestration/` : `docker-compose up -d`.
+> `scripts/generate_workflows.py` écrit désormais en UTF-8 sur toutes les plateformes.

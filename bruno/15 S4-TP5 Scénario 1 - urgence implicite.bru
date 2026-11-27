@@ -1,0 +1,43 @@
+meta {
+  name: S4-TP5 Scénario 1 - urgence implicite
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{baseUrl}}/tickets
+  body: json
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+  Content-Type: application/json
+  Prefer: return=representation
+}
+
+body:json {
+  {
+    "organisation_id": "{{orgId}}",
+    "cree_par": "{{userId}}",
+    "titre": "Blocage des virements fournisseurs",
+    "description": "Erreur HTTP 500 sur le module de trésorerie pour l'ensemble du service comptable depuis 9h00.",
+    "priorite": "normale"
+  }
+}
+
+script:post-response {
+  // Mémorise le ticket pour 20 (vérification) et 21 (rejeu vers n8n)
+  bru.setEnvVar("ticketId", res.body[0].id);
+  bru.setVar("lastTicketRecord", JSON.stringify(res.body[0]));
+  bru.setVar("prioritesAttendues", ["critique"]);
+  bru.setVar("escaladeAttendue", true);
+}
+
+tests {
+  test("201 statut nouveau", function () {
+    expect(res.status).to.equal(201);
+    expect(res.body[0].statut).to.equal("nouveau");
+  });
+}

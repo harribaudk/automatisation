@@ -1,0 +1,40 @@
+meta {
+  name: S4-TP5 Vérif qualification IA du dernier ticket
+  type: http
+  seq: 20
+}
+
+get {
+  url: {{baseUrl}}/tickets?id=eq.{{ticketId}}&select=id,titre,statut,priorite,metadata
+  body: none
+  auth: none
+}
+
+headers {
+  apikey: {{secretKey}}
+  Authorization: Bearer {{secretKey}}
+}
+
+docs {
+  À lancer ~20 s après 15, 16, 17, 18 ou 19 (le temps que l'agent qualifie le ticket).
+}
+
+tests {
+  const t = res.body[0];
+  const prios = bru.getVar("prioritesAttendues") || [];
+  const escalade = bru.getVar("escaladeAttendue");
+
+  test("ticket qualifié (en_cours + metadata IA)", function () {
+    expect(t.statut).to.equal("en_cours");
+    expect(t.metadata).to.have.property("diagnostic_ia");
+    expect(t.metadata).to.have.property("categorie");
+  });
+  test("priorité finale attendue : " + prios.join(" ou "), function () {
+    expect(prios).to.include(t.priorite);
+  });
+  if (escalade !== null && escalade !== undefined) {
+    test("escalade_effectuee = " + escalade, function () {
+      expect(t.metadata.escalade_effectuee).to.equal(escalade);
+    });
+  }
+}

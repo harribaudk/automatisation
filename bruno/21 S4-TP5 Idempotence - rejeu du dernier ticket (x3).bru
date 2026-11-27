@@ -1,0 +1,37 @@
+meta {
+  name: S4-TP5 Idempotence - rejeu du dernier ticket (x3)
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{n8nWebhookUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "type": "INSERT",
+    "table": "tickets",
+    "schema": "public",
+    "record": {{lastTicketRecord}},
+    "old_record": null
+  }
+}
+
+docs {
+  Rejoue vers l'URL de Production n8n le payload d'un ticket DÉJÀ traité (lancer d'abord 15).
+  Lancer 3 fois de suite. Attendu dans n8n > Executions : chaque exécution s'arrête sur
+  « Doublon ignoré », aucun nœud de l'agent n'est exécuté => 0 appel LLM, 0 token.
+}
+
+tests {
+  test("webhook accepté (200)", function () {
+    expect(res.status).to.equal(200);
+  });
+}
